@@ -50,7 +50,18 @@ export interface Reservation {
   tableNumber?: number | string;
   status: "pending" | "confirmed" | "seated" | "completed" | "cancelled";
   notes?: string;
-  preOrder?: OrderItem[]; // Pre-pedido de la reserva
+  preOrder?: OrderItem[];
+}
+
+// Tipo para comandas despachadas
+export interface DispatchedOrder {
+  id: string;
+  tableId: string;
+  tableNumber: number;
+  items: OrderItem[];
+  total: number;
+  createdAt: Date;
+  dispatchedAt: Date;
 }
 
 interface RestaurantContextType {
@@ -66,6 +77,9 @@ interface RestaurantContextType {
   payOrder: (tableId: string) => void;
   orderHistory: OrderHistory[];
   updateKitchenItemStatus: (tableId: string, itemId: string, status: "pending" | "preparing" | "ready") => void;
+  updateOrderKitchenStatus: (tableId: string, status: "pending" | "preparing" | "ready") => void;
+  dispatchedOrders: DispatchedOrder[];
+  resumeDispatchedOrder: (dispatchedOrderId: string) => void;
   reservations: Reservation[];
   addReservation: (reservation: Omit<Reservation, "id" | "status">) => void;
   updateReservation: (id: string, reservation: Partial<Reservation>) => void;
@@ -95,6 +109,7 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
   const [tableOrders, setTableOrders] = useState<{ [tableId: string]: TableOrder }>({});
   const [orderHistory, setOrderHistory] = useState<OrderHistory[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [dispatchedOrders, setDispatchedOrders] = useState<DispatchedOrder[]>([]);
   
 
   const updateInventory = (items: InventoryItem[]) => {
@@ -261,6 +276,9 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
 
     setOrderHistory((prev) => [historyEntry, ...prev]);
 
+    // Eliminar de despachadas si estaba ahí
+    setDispatchedOrders((prev) => prev.filter(d => d.tableId !== tableId));
+
     setTableOrders((prev) => {
       const { [tableId]: _, ...rest } = prev;
       return rest;
@@ -292,6 +310,84 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
         },
       };
     });
+  };
+
+  // Actualizar el estado de toda la comanda
+  const updateOrderKitchenStatus = (tableId: string, status: "pending" | "preparing" | "ready") => {
+    const currentOrder = tableOrders[tableId];
+    if (!currentOrder) return;
+
+    // Si se marca como "ready", despachar la comanda
+    if (status === "ready") {
+      const dispatchedOrder: DispatchedOrder = {
+        id: Date.now().toString(),
+        tableId: currentOrder.tableId,
+        tableNumber: currentOrder.tableNumber,
+        items: currentOrder.items.map(item => ({...item})),
+        total: currentOrder.total,
+        createdAt: currentOrder.createdAt,
+        dispatchedAt: new Date(),
+      };
+
+      setDispatchedOrders((prev) => [dispatchedOrder, ...prev]);
+
+      // Mantener la orden en tableOrders pero marcar items como ready
+      setTableOrders((prev) => {
+        const updatedItems = currentOrder.items.map((item) =>
+          item.category === "Comida" ? { ...item, kitchenStatus: status } : item
+        );
+
+        return {
+          ...prev,
+          [tableId]: {
+            ...currentOrder,
+            items: updatedItems,
+          },
+        };
+      });
+    } else {
+      // Para "pending" o "preparing", solo actualizar el estado
+      setTableOrders((prev) => {
+        const updatedItems = currentOrder.items.map((item) =>
+          item.category === "Comida" ? { ...item, kitchenStatus: status } : item
+        );
+
+        return {
+          ...prev,
+          [tableId]: {
+            ...currentOrder,
+            items: updatedItems,
+          },
+        };
+      });
+    }
+  };
+
+  // Retomar una comanda despachada
+  const resumeDispatchedOrder = (dispatchedOrderId: string) => {
+    const dispatchedOrder = dispatchedOrders.find(d => d.id === dispatchedOrderId);
+    if (!dispatchedOrder) return;
+
+    // Actualizar el estado de los items de comida a "preparing"
+    setTableOrders((prev) => {
+      const currentOrder = prev[dispatchedOrder.tableId];
+      if (!currentOrder) return prev;
+
+      const updatedItems = currentOrder.items.map((item) =>
+        item.category === "Comida" ? { ...item, kitchenStatus: "preparing" as const } : item
+      );
+
+      return {
+        ...prev,
+        [dispatchedOrder.tableId]: {
+          ...currentOrder,
+          items: updatedItems,
+        },
+      };
+    });
+
+    // Eliminar de la lista de despachadas
+    setDispatchedOrders((prev) => prev.filter(d => d.id !== dispatchedOrderId));
   };
 
   const getTableTotal = (tableId: string): number => {
@@ -331,7 +427,6 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
     return reservations.find((res) => res.tableId === tableId && res.status !== "completed" && res.status !== "cancelled");
   };
 
-  // Agregar items al pre-pedido de una reserva (SIN descontar inventario aún)
   const addPreOrderToReservation = (reservationId: string, item: InventoryItem, quantity: number): boolean => {
     const reservation = reservations.find(r => r.id === reservationId);
     if (!reservation) return false;
@@ -377,7 +472,6 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
     return true;
   };
 
-  // Eliminar item del pre-pedido
   const removePreOrderItem = (reservationId: string, itemId: string) => {
     setReservations((prev) =>
       prev.map((res) => {
@@ -389,30 +483,28 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
     );
   };
 
-  // Activar el pedido cuando el cliente llega (descontar inventario y enviar a cocina)
   const activateReservationOrder = (reservationId: string): boolean => {
     const reservation = reservations.find(r => r.id === reservationId);
     if (!reservation || !reservation.preOrder || !reservation.tableId) return false;
 
-    // Verificar stock disponible para todos los items
     for (const item of reservation.preOrder) {
       const invItem = inventory.find(i => i.id === item.inventoryItemId);
       if (!invItem || invItem.quantity < item.quantity) {
-        return false; // No hay suficiente stock
+        return false;
       }
     }
 
-    // Descontar del inventario
     reservation.preOrder.forEach(item => {
       decreaseInventory(item.inventoryItemId, item.quantity);
     });
 
-    // Crear la orden en la mesa
     const tableNumber = typeof reservation.tableNumber === "number" ? reservation.tableNumber : 0;
+    const tableId = reservation.tableId;
+    
     setTableOrders((prev) => ({
       ...prev,
-      [reservation.tableId!]: {
-        tableId: reservation.tableId!,
+      [tableId]: {
+        tableId,
         tableNumber,
         items: reservation.preOrder!,
         total: reservation.preOrder!.reduce((sum, item) => sum + item.total, 0),
@@ -421,7 +513,6 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
       },
     }));
 
-    // Limpiar el pre-pedido de la reserva
     setReservations((prev) =>
       prev.map((res) =>
         res.id === reservationId
@@ -448,6 +539,9 @@ export const RestaurantProvider: React.FC<{ children: ReactNode }> = ({ children
         payOrder,
         orderHistory,
         updateKitchenItemStatus,
+        updateOrderKitchenStatus,
+        dispatchedOrders,
+        resumeDispatchedOrder,
         reservations,
         addReservation,
         updateReservation,

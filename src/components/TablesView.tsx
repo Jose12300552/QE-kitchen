@@ -1,3 +1,6 @@
+// INSTRUCCIONES: Este archivo REEMPLAZA a src/components/TablesView.tsx
+// El problema estaba en el formateo de fecha en el popup de asignar reservas
+
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,12 +37,13 @@ const TablesView = () => {
     payOrder,
     getReservationByTable,
     reservations,
-    assignTableToReservation
+    assignTableToReservation,
+    updateReservation
   } = useRestaurant();
   const { toast } = useToast();
   
   const [tables, setTables] = useState<Table[]>([
-    { id: "x", number: "X", capacity: 0, isDirectSale: true }, // Mesa X siempre primera
+    { id: "x", number: "X", capacity: 0, isDirectSale: true },
     { id: "1", number: 1, capacity: 4 },
     { id: "2", number: 2, capacity: 2 },
     { id: "3", number: 3, capacity: 6 },
@@ -59,6 +63,7 @@ const TablesView = () => {
   const [isAddTableOpen, setIsAddTableOpen] = useState(false);
   const [isEditTableOpen, setIsEditTableOpen] = useState(false);
   const [isAssignReservationOpen, setIsAssignReservationOpen] = useState(false);
+  const [isConfirmPaymentOpen, setIsConfirmPaymentOpen] = useState(false);
   const [editingTable, setEditingTable] = useState<Table | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("Todos");
   const [quantities, setQuantities] = useState<{ [key: string]: number }>({});
@@ -66,7 +71,6 @@ const TablesView = () => {
 
   const categories = ["Todos", ...Array.from(new Set(inventory.map(item => item.category)))];
 
-  // Separar Mesa X del resto
   const mesaX = tables.find(t => t.isDirectSale);
   const regularTables = tables.filter(t => !t.isDirectSale);
 
@@ -74,14 +78,27 @@ const TablesView = () => {
     ? inventory 
     : inventory.filter(item => item.category === selectedCategory);
 
+  // Función helper para formatear fechas de forma segura
+  const formatReservationDate = (date: Date): string => {
+    try {
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return "Fecha inválida";
+      return d.toLocaleDateString('es-ES', { 
+        weekday: 'short',
+        month: 'short', 
+        day: 'numeric' 
+      });
+    } catch (error) {
+      return "Fecha inválida";
+    }
+  };
+
   const openComanda = (table: Table) => {
-    // Si la mesa no tiene reserva y está libre, mostrar opción de asignar reserva
     if (!table.isDirectSale && !getReservationByTable(table.id) && !tableOrders[table.id]) {
-      // Buscar reservas confirmadas o pendientes que coincidan con la capacidad
       const availableReservations = reservations.filter(r => 
-        (r.status === "confirmed" || r.status === "pending") && 
+        r.status === "pending" && 
         r.numberOfPeople <= table.capacity &&
-        !r.tableNumber // No asignadas aún
+        !r.tableNumber
       );
       
       if (availableReservations.length > 0) {
@@ -102,10 +119,8 @@ const TablesView = () => {
     const reservation = reservations.find(r => r.id === reservationId);
     if (!reservation) return;
 
-    // Usar la función del contexto para asignar la mesa
     assignTableToReservation(reservationId, selectedTable.id, selectedTable.number);
     
-    // Si la reserva tiene pre-pedido, transferir los items a la comanda
     if (reservation.preOrder && reservation.preOrder.length > 0) {
       reservation.preOrder.forEach(item => {
         const inventoryItem = inventory.find(i => i.name === item.name);
@@ -115,19 +130,21 @@ const TablesView = () => {
         }
       });
       
+      // Marcar como sentado después de cargar el pre-pedido
+      updateReservation(reservationId, { status: "seated" });
+      
       toast({
-        title: "Reserva asignada con pre-pedido",
+        title: "✅ Reserva asignada con pre-pedido",
         description: `Mesa ${selectedTable.number} asignada a ${reservation.customerName}. Pre-pedido cargado.`,
       });
     } else {
       toast({
-        title: "Reserva asignada",
+        title: "✅ Reserva asignada",
         description: `Mesa ${selectedTable.number} asignada a ${reservation.customerName}`,
       });
     }
     
     setIsAssignReservationOpen(false);
-    // Abrir la comanda directamente después de asignar
     setIsComandaOpen(true);
   };
 
@@ -145,7 +162,7 @@ const TablesView = () => {
 
     if (item.quantity < quantity) {
       toast({
-        title: "Stock insuficiente",
+        title: "⚠️ Stock insuficiente",
         description: `Solo quedan ${item.quantity} ${item.unit} de ${item.name}`,
         variant: "destructive",
       });
@@ -157,16 +174,10 @@ const TablesView = () => {
     
     if (success) {
       toast({
-        title: "Producto agregado",
+        title: "✅ Producto agregado",
         description: `${quantity} x ${item.name} agregado a Mesa ${selectedTable.number}`,
       });
       setQuantities({ ...quantities, [itemId]: 1 });
-
-      if (selectedTable.isDirectSale) {
-        setTimeout(() => {
-          handlePayOrder();
-        }, 500);
-      }
     }
   };
 
@@ -174,7 +185,7 @@ const TablesView = () => {
     if (!selectedTable) return;
     removeItemFromTable(selectedTable.id, itemId);
     toast({
-      title: "Producto eliminado",
+      title: "🗑️ Producto eliminado",
       description: "El producto ha sido eliminado de la comanda",
     });
   };
@@ -185,7 +196,7 @@ const TablesView = () => {
     const order = tableOrders[selectedTable.id];
     if (!order || order.items.length === 0) {
       toast({
-        title: "Comanda vacía",
+        title: "⚠️ Comanda vacía",
         description: "Agrega productos antes de marcar como por cobrar",
         variant: "destructive",
       });
@@ -194,7 +205,7 @@ const TablesView = () => {
 
     markOrderReadyToPay(selectedTable.id);
     toast({
-      title: "Mesa marcada",
+      title: "✅ Mesa marcada",
       description: `Mesa ${selectedTable.number} está lista para cobrar - Total: $${order.total.toFixed(2)}`,
     });
     setIsComandaOpen(false);
@@ -211,18 +222,36 @@ const TablesView = () => {
     
     if (selectedTable.isDirectSale) {
       toast({
-        title: "Venta directa completada",
+        title: "✅ Venta directa completada",
         description: `Total: $${order.total.toFixed(2)}`,
       });
     } else {
       toast({
-        title: "Pago completado",
+        title: "✅ Pago completado",
         description: `Mesa ${selectedTable.number} pagada - Total: $${order.total.toFixed(2)}`,
       });
     }
     
+    setIsConfirmPaymentOpen(false);
     setIsComandaOpen(false);
     setSelectedTable(null);
+  };
+
+  const handleRequestPayment = () => {
+    if (!selectedTable) return;
+    
+    const order = tableOrders[selectedTable.id];
+    if (!order || order.items.length === 0) {
+      toast({
+        title: "⚠️ Comanda vacía",
+        description: "Agrega productos antes de cobrar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Abrir diálogo de confirmación
+    setIsConfirmPaymentOpen(true);
   };
 
   const handleCancelOrder = () => {
@@ -233,7 +262,7 @@ const TablesView = () => {
       if (confirm("¿Estás seguro de cancelar esta comanda? Los productos volverán al inventario.")) {
         clearTableOrder(selectedTable.id);
         toast({
-          title: "Comanda cancelada",
+          title: "❌ Comanda cancelada",
           description: "Los productos han sido devueltos al inventario",
         });
         setIsComandaOpen(false);
@@ -248,7 +277,7 @@ const TablesView = () => {
   const handleAddTable = () => {
     if (!newTableForm.number || !newTableForm.capacity) {
       toast({
-        title: "Error",
+        title: "⚠️ Error",
         description: "Completa todos los campos",
         variant: "destructive",
       });
@@ -265,7 +294,7 @@ const TablesView = () => {
     setNewTableForm({ number: "", capacity: "" });
     setIsAddTableOpen(false);
     toast({
-      title: "Mesa agregada",
+      title: "✅ Mesa agregada",
       description: `Mesa ${newTable.number} agregada exitosamente`,
     });
   };
@@ -277,7 +306,7 @@ const TablesView = () => {
     setIsEditTableOpen(false);
     setEditingTable(null);
     toast({
-      title: "Mesa actualizada",
+      title: "✅ Mesa actualizada",
       description: "Los cambios han sido guardados",
     });
   };
@@ -286,7 +315,7 @@ const TablesView = () => {
     const table = tables.find(t => t.id === tableId);
     if (table?.isDirectSale) {
       toast({
-        title: "No se puede eliminar",
+        title: "⚠️ No se puede eliminar",
         description: "La Mesa X no se puede eliminar",
         variant: "destructive",
       });
@@ -295,7 +324,7 @@ const TablesView = () => {
 
     if (tableOrders[tableId]) {
       toast({
-        title: "No se puede eliminar",
+        title: "⚠️ No se puede eliminar",
         description: "La mesa tiene pedidos activos",
         variant: "destructive",
       });
@@ -305,7 +334,7 @@ const TablesView = () => {
     if (confirm("¿Estás seguro de eliminar esta mesa?")) {
       setTables(tables.filter(t => t.id !== tableId));
       toast({
-        title: "Mesa eliminada",
+        title: "✅ Mesa eliminada",
         description: "La mesa ha sido eliminada",
       });
     }
@@ -368,7 +397,6 @@ const TablesView = () => {
     reservada: regularTables.filter(t => getTableStatus(t) === "reservada").length,
   };
 
-  // Calcular estadísticas de Mesa X
   const mesaXStats = mesaX ? {
     totalDia: getTableTotal(mesaX.id),
     pedidosActivos: tableOrders[mesaX.id]?.items.length || 0,
@@ -379,7 +407,7 @@ const TablesView = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-bold text-foreground">Sistema de Mesas</h2>
+          <h2 className="text-3xl font-bold text-foreground">🍽️ Sistema de Mesas</h2>
           <p className="text-muted-foreground">Gestión de mesas del restaurante</p>
         </div>
         <Dialog open={isAddTableOpen} onOpenChange={setIsAddTableOpen}>
@@ -418,7 +446,7 @@ const TablesView = () => {
         </Dialog>
       </div>
 
-      {/* Mesa X - Destacada en la parte superior */}
+      {/* Mesa X */}
       {mesaX && (
         <Card className="border-2 border-primary shadow-lg bg-gradient-to-br from-primary/10 to-primary/5">
           <CardHeader className="pb-4">
@@ -518,7 +546,7 @@ const TablesView = () => {
         </Card>
       </div>
 
-      {/* Grid de Mesas - 5 columnas */}
+      {/* Grid de Mesas */}
       <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xl font-semibold flex items-center gap-2">
@@ -531,7 +559,6 @@ const TablesView = () => {
           </div>
         </div>
         
-        {/* Grid de 5 columnas */}
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {regularTables.map((table) => {
             const tableStatus = getTableStatus(table);
@@ -570,10 +597,12 @@ const TablesView = () => {
                       <p className="text-xs font-semibold text-blue-600">
                         {reservation.customerName}
                       </p>
-                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Clock className="h-3 w-3" />
-                        {reservation.time}
-                      </div>
+                      {reservation.time && (
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <Clock className="h-3 w-3" />
+                          {reservation.time}
+                        </div>
+                      )}
                       {reservation.preOrder && reservation.preOrder.length > 0 && (
                         <Badge variant="outline" className="text-xs w-full justify-center">
                           Pre-pedido: {reservation.preOrder.length} items
@@ -615,39 +644,7 @@ const TablesView = () => {
         </div>
       </div>
 
-      {/* Dialog Editar Mesa */}
-      <Dialog open={isEditTableOpen} onOpenChange={setIsEditTableOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Editar Mesa</DialogTitle>
-          </DialogHeader>
-          {editingTable && (
-            <div className="space-y-4">
-              <div>
-                <Label>Número de Mesa</Label>
-                <Input
-                  type="number"
-                  value={editingTable.number}
-                  onChange={(e) => setEditingTable({ ...editingTable, number: parseInt(e.target.value) })}
-                />
-              </div>
-              <div>
-                <Label>Capacidad (personas)</Label>
-                <Input
-                  type="number"
-                  value={editingTable.capacity}
-                  onChange={(e) => setEditingTable({ ...editingTable, capacity: parseInt(e.target.value) })}
-                />
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button onClick={handleEditTable}>Guardar Cambios</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Dialog de Comanda */}
+      {/* Dialog Comanda */}
       <Dialog open={isComandaOpen} onOpenChange={setIsComandaOpen}>
         <DialogContent className="max-w-6xl max-h-[90vh]">
           <DialogHeader>
@@ -669,7 +666,7 @@ const TablesView = () => {
           </DialogHeader>
           
           <div className="grid md:grid-cols-2 gap-6 overflow-hidden">
-            {/* Panel Izquierdo - Productos Disponibles */}
+            {/* Panel Izquierdo - Productos */}
             <div className="space-y-4">
               <div>
                 <Label>Categorías</Label>
@@ -756,7 +753,7 @@ const TablesView = () => {
               </ScrollArea>
             </div>
 
-            {/* Panel Derecho - Comanda Actual */}
+            {/* Panel Derecho - Comanda */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <Label className="text-lg">Comanda Actual</Label>
@@ -825,14 +822,14 @@ const TablesView = () => {
             </Button>
             {selectedTable?.isDirectSale ? (
               <Button 
-                onClick={handlePayOrder}
+                onClick={handleRequestPayment}
                 disabled={!selectedTable || !tableOrders[selectedTable.id] || tableOrders[selectedTable.id].items.length === 0}
               >
                 <DollarSign className="h-4 w-4 mr-2" />
                 Cobrar Venta
               </Button>
             ) : selectedTable && tableOrders[selectedTable.id]?.status === "ready_to_pay" ? (
-              <Button onClick={handlePayOrder}>
+              <Button onClick={handleRequestPayment}>
                 <DollarSign className="h-4 w-4 mr-2" />
                 Cobrar Mesa
               </Button>
@@ -849,7 +846,7 @@ const TablesView = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog Asignar Reserva desde Mesa */}
+      {/* Dialog Asignar Reserva */}
       <Dialog open={isAssignReservationOpen} onOpenChange={setIsAssignReservationOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -868,7 +865,7 @@ const TablesView = () => {
               <div className="space-y-3">
                 {reservations
                   .filter(r => 
-                    (r.status === "confirmed" || r.status === "pending") && 
+                    r.status === "pending" && 
                     selectedTable && 
                     r.numberOfPeople <= selectedTable.capacity &&
                     !r.tableNumber
@@ -882,9 +879,9 @@ const TablesView = () => {
                       <div className="space-y-2">
                         <div className="flex items-start justify-between">
                           <div>
-                            <h4 className="font-semibold text-lg">{reservation.customerName}</h4>
-                            <Badge variant={reservation.status === "confirmed" ? "default" : "secondary"}>
-                              {reservation.status === "confirmed" ? "Confirmada" : "Pendiente"}
+                            <h4 className="font-semibold text-lg">👤 {reservation.customerName}</h4>
+                            <Badge variant="secondary">
+                              {reservation.status === "pending" ? "Pendiente" : "Confirmada"}
                             </Badge>
                           </div>
                           <Badge variant="outline">
@@ -895,16 +892,20 @@ const TablesView = () => {
                         <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
                           <div className="flex items-center gap-2">
                             <Calendar className="h-3 w-3" />
-                            {reservation.date}
+                            {formatReservationDate(reservation.date)}
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Clock className="h-3 w-3" />
-                            {reservation.time}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Phone className="h-3 w-3" />
-                            {reservation.phoneNumber}
-                          </div>
+                          {reservation.time && (
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-3 w-3" />
+                              {reservation.time}
+                            </div>
+                          )}
+                          {reservation.phoneNumber && (
+                            <div className="flex items-center gap-2">
+                              <Phone className="h-3 w-3" />
+                              {reservation.phoneNumber}
+                            </div>
+                          )}
                         </div>
                         
                         {reservation.preOrder && reservation.preOrder.length > 0 && (
@@ -924,7 +925,7 @@ const TablesView = () => {
                         
                         {reservation.notes && (
                           <p className="text-xs bg-muted p-2 rounded">
-                            Notas: {reservation.notes}
+                            📝 Notas: {reservation.notes}
                           </p>
                         )}
                       </div>
@@ -932,7 +933,7 @@ const TablesView = () => {
                   ))}
                   
                 {reservations.filter(r => 
-                  (r.status === "confirmed" || r.status === "pending") && 
+                  r.status === "pending" && 
                   selectedTable && 
                   r.numberOfPeople <= selectedTable.capacity &&
                   !r.tableNumber
@@ -949,6 +950,99 @@ const TablesView = () => {
           <DialogFooter>
             <Button variant="outline" onClick={handleSkipReservation}>
               Continuar sin Reserva
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog Confirmación de Pago */}
+      <Dialog open={isConfirmPaymentOpen} onOpenChange={setIsConfirmPaymentOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl flex items-center gap-2">
+              <DollarSign className="h-6 w-6 text-primary" />
+              Confirmar Cobro
+            </DialogTitle>
+          </DialogHeader>
+          
+          {selectedTable && tableOrders[selectedTable.id] && (
+            <div className="space-y-4">
+              {/* Información de la mesa */}
+              <div className="bg-primary/10 p-4 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-lg font-semibold">
+                    {selectedTable.isDirectSale ? "Venta Directa" : `Mesa ${selectedTable.number}`}
+                  </span>
+                  <Badge variant="default" className="text-lg px-3 py-1">
+                    ${tableOrders[selectedTable.id].total.toFixed(2)}
+                  </Badge>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Lista de productos */}
+              <div>
+                <h4 className="font-semibold mb-3 flex items-center gap-2">
+                  <ShoppingCart className="h-4 w-4" />
+                  Productos:
+                </h4>
+                <ScrollArea className="max-h-[300px] pr-2">
+                  <div className="space-y-2">
+                    {tableOrders[selectedTable.id].items.map((item) => (
+                      <div 
+                        key={item.id} 
+                        className="flex items-center justify-between p-3 bg-muted rounded-lg"
+                      >
+                        <div className="flex-1">
+                          <p className="font-medium">{item.name}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {item.quantity} x ${item.price.toFixed(2)}
+                          </p>
+                        </div>
+                        <span className="font-bold text-primary">
+                          ${item.total.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </div>
+
+              <Separator />
+
+              {/* Total */}
+              <div className="bg-primary/20 p-4 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <span className="text-xl font-bold">TOTAL A COBRAR:</span>
+                  <span className="text-3xl font-bold text-primary">
+                    ${tableOrders[selectedTable.id].total.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Pregunta de confirmación */}
+              <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg">
+                <p className="text-sm text-center font-medium text-yellow-900">
+                  ¿Está seguro de proceder con el cobro?
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => setIsConfirmPaymentOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button 
+              onClick={handlePayOrder}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              <DollarSign className="h-4 w-4 mr-2" />
+              Confirmar Cobro
             </Button>
           </DialogFooter>
         </DialogContent>
